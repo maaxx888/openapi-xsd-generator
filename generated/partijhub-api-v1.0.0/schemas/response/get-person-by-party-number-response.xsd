@@ -1,0 +1,98 @@
+<?xml version='1.0' encoding='utf-8'?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" elementFormDefault="unqualified">
+  <xs:element name="GetPersonByPartyNumberResponse" type="GetPersonByPartyNumberResponseType" />
+  <xs:complexType name="GetPersonByPartyNumberResponseType">
+    <xs:sequence>
+      <!-- Always present: SUCCESS or FAILED -->
+      <xs:element name="status" type="StatusType" minOccurs="1" maxOccurs="1" />
+      <!-- Filled on SUCCESS (from person) -->
+      <xs:element name="person" type="PersonResponseType" minOccurs="0" maxOccurs="1" />
+      <!-- Filled on FAILED; maxOccurs=unbounded → serialized as JSON array -->
+      <xs:element name="errors" type="ErrorItemType" minOccurs="0" maxOccurs="unbounded" />
+    </xs:sequence>
+  </xs:complexType>
+  <xs:simpleType name="StatusType">
+    <xs:restriction base="xs:string">
+      <!-- Operation succeeded -->
+      <xs:enumeration value="SUCCESS" />
+      <!-- Operation failed -->
+      <xs:enumeration value="FAILED" />
+    </xs:restriction>
+  </xs:simpleType>
+  <xs:complexType name="ErrorDetailsType">
+    <xs:sequence>
+      <!-- Error identification code -->
+      <xs:element name="identification" type="xs:string" minOccurs="0" maxOccurs="1" />
+      <!-- Error diagnostic message -->
+      <xs:element name="diagnose" type="xs:string" minOccurs="0" maxOccurs="1" />
+    </xs:sequence>
+  </xs:complexType>
+  <xs:complexType name="ErrorItemType">
+    <xs:sequence>
+      <!-- Machine-readable error code -->
+      <xs:element name="code" type="xs:string" minOccurs="1" maxOccurs="1" />
+      <!-- Human-readable error message -->
+      <xs:element name="message" type="xs:string" minOccurs="1" maxOccurs="1" />
+      <!-- Error details (backend-specific) -->
+      <xs:element name="details" type="ErrorDetailsType" minOccurs="0" maxOccurs="1" />
+    </xs:sequence>
+  </xs:complexType>
+  <xs:complexType name="PersonResponseType">
+    <xs:sequence>
+      <!-- Computed by OIC as '{firstName} {lastName} ({partyNumber})' → Oracle hz_parties.PARTY_NAME and TCA_PARTIES.SOURCE_PARTY_NAME -->
+      <xs:element name="partyName" type="xs:string" minOccurs="1" maxOccurs="1" />
+      <!-- Register code derived from MAGDA Persoon/Register/Code, translated to Oracle-ready values. Always present — defaults to Rijksregister when MAGDA does not return a Register element. The `code` field maps directly to Oracle HZ_PERSON_PROFILES DFF `authentiekeBron`. -->
+      <xs:element name="register" type="RegisterType" minOccurs="1" maxOccurs="1" />
+      <!-- First given name from MAGDA Naam/Voornamen/Voornaam[1] → Oracle HZ_PERSON_PROFILES.PERSON_FIRST_NAME -->
+      <xs:element name="firstName" type="xs:string" minOccurs="1" maxOccurs="1" />
+      <!-- Middle name(s) from MAGDA Naam/Voornamen/Voornaam[2..n] joined with space → Oracle HZ_PERSON_PROFILES.PERSON_MIDDLE_NAME. Omitted when no second given name. -->
+      <xs:element name="middleName" type="xs:string" minOccurs="0" maxOccurs="1" />
+      <!-- Last name from MAGDA Naam/Achternamen/Achternaam[], all values joined with space → Oracle HZ_PERSON_PROFILES.PERSON_LAST_NAME -->
+      <xs:element name="lastName" type="xs:string" minOccurs="1" maxOccurs="1" />
+      <!-- Gender from MAGDA Geslacht/Code and Geslacht/Omschrijving. Always present. The `code` field maps to Oracle HZ_PERSON_PROFILES.GENDER. -->
+      <xs:element name="gender" type="GenderType" minOccurs="1" maxOccurs="1" />
+      <!-- Date of death from MAGDA Overlijden/Datum → Oracle HZ_PERSON_PROFILES.DATE_OF_DEATH. Omitted when person is alive. -->
+      <xs:element name="deathDate" type="xs:string" minOccurs="0" maxOccurs="1" />
+      <!-- Main residence address (Hoofdverblijfplaats) from MAGDA. Always present on a 200 response — if MAGDA has no Hoofdverblijfplaats, a 422 ADDRESS_NOT_FOUND is returned. Optional sub-field boxNumber is omitted when absent. -->
+      <xs:element name="address" type="AddressType" minOccurs="1" maxOccurs="1" />
+    </xs:sequence>
+  </xs:complexType>
+  <xs:complexType name="RegisterType">
+    <xs:sequence>
+      <!-- Oracle `authentiekeBron` DFF value derived from MAGDA Register/Code: MAGDA `RR` or `1` → `"01"` (Rijksregister); MAGDA `2` (bevolkingsregister) → `"01"`; MAGDA `BIS` → `"02"`; MAGDA `RAD` → `"02"`; Register absent → `"01"` (default). -->
+      <xs:element name="code" type="CodeType" minOccurs="1" maxOccurs="1" />
+      <!-- Human-readable register description in Dutch -->
+      <xs:element name="description" type="xs:string" minOccurs="1" maxOccurs="1" />
+    </xs:sequence>
+  </xs:complexType>
+  <xs:simpleType name="CodeType">
+    <xs:restriction base="xs:string">
+      <xs:enumeration value="01" />
+      <xs:enumeration value="02" />
+    </xs:restriction>
+  </xs:simpleType>
+  <xs:complexType name="GenderType">
+    <xs:sequence>
+      <!-- Gender code from MAGDA Geslacht/Code → Oracle HZ_PERSON_PROFILES.GENDER. 0=onbepaald, 1=man, 2=vrouw -->
+      <xs:element name="code" type="CodeType" minOccurs="1" maxOccurs="1" />
+      <!-- Gender description from MAGDA Geslacht/Omschrijving (Dutch) -->
+      <xs:element name="description" type="xs:string" minOccurs="1" maxOccurs="1" />
+    </xs:sequence>
+  </xs:complexType>
+  <xs:complexType name="AddressType">
+    <xs:sequence>
+      <!-- Street name from MAGDA Hoofdverblijfplaats/NietGestandaardiseerdeStraatnaam/String → Oracle hz_parties.ADDRESS1 -->
+      <xs:element name="streetName" type="xs:string" minOccurs="1" maxOccurs="1" />
+      <!-- House number from MAGDA Hoofdverblijfplaats/Huisnummer → Oracle hz_parties.ADDRESS2 -->
+      <xs:element name="houseNumber" type="xs:string" minOccurs="1" maxOccurs="1" />
+      <!-- Box/bus number from MAGDA Hoofdverblijfplaats/Busnummer → Oracle hz_parties.ADDRESS3. Omitted when absent. -->
+      <xs:element name="boxNumber" type="xs:string" minOccurs="0" maxOccurs="1" />
+      <!-- Postal code from MAGDA Hoofdverblijfplaats/Postcode → Oracle hz_parties.POSTAL_CODE -->
+      <xs:element name="postalCode" type="xs:string" minOccurs="1" maxOccurs="1" />
+      <!-- Municipality name from MAGDA Hoofdverblijfplaats/NietGestandaardiseerdeGemeentenaam/String → Oracle hz_parties.CITY -->
+      <xs:element name="city" type="xs:string" minOccurs="1" maxOccurs="1" />
+      <!-- ISO 3166-1 alpha-3 country code from MAGDA Hoofdverblijfplaats/ISOCodeLand → Oracle hz_parties.COUNTRY -->
+      <xs:element name="countryIsoCode" type="xs:string" minOccurs="1" maxOccurs="1" />
+    </xs:sequence>
+  </xs:complexType>
+</xs:schema>
