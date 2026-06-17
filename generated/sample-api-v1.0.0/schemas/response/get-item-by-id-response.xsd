@@ -1,0 +1,38 @@
+<?xml version='1.0' encoding='utf-8'?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" elementFormDefault="unqualified">
+  <xs:element name="GetItemByIdResponse" type="GetItemByIdResponseType" />
+  <xs:complexType name="GetItemByIdResponseType">
+    <xs:sequence>
+      <xs:element name="status" type="StatusType" minOccurs="1" maxOccurs="1" />
+      <xs:element name="item" type="ItemResponseType" minOccurs="0" maxOccurs="1" />
+      <xs:element name="errors" type="ErrorItemType" minOccurs="0" maxOccurs="unbounded" />
+    </xs:sequence>
+  </xs:complexType>
+  <xs:simpleType name="StatusType">
+    <xs:restriction base="xs:string">
+      <xs:enumeration value="SUCCESS" />
+      <xs:enumeration value="FAILED" />
+    </xs:restriction>
+  </xs:simpleType>
+  <xs:complexType name="ErrorDetailsType">
+    <xs:sequence>
+      <xs:element name="identification" type="xs:string" minOccurs="0" maxOccurs="1" />
+      <xs:element name="diagnose" type="xs:string" minOccurs="0" maxOccurs="1" />
+    </xs:sequence>
+  </xs:complexType>
+  <xs:complexType name="ErrorItemType">
+    <xs:sequence>
+      <xs:element name="code" type="xs:string" minOccurs="1" maxOccurs="1" />
+      <xs:element name="message" type="xs:string" minOccurs="1" maxOccurs="1" />
+      <xs:element name="details" type="ErrorDetailsType" minOccurs="0" maxOccurs="1" />
+    </xs:sequence>
+  </xs:complexType>
+  <xs:complexType name="ItemResponseType">
+    <xs:sequence>
+      <xs:element name="itemId" type="xs:string" minOccurs="1" maxOccurs="1" />
+      <xs:element name="name" type="xs:string" minOccurs="1" maxOccurs="1" />
+      <xs:element name="description" type="xs:string" minOccurs="0" maxOccurs="1" />
+      <xs:element name="price" type="xs:decimal" minOccurs="1" maxOccurs="1" />
+    </xs:sequence>
+  </xs:complexType>
+</xs:schema>
