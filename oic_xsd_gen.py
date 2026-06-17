@@ -5,7 +5,7 @@ import json
 import re
 import sys
 from pathlib import Path
-from xml.etree.ElementTree import Element, SubElement, tostring, register_namespace
+from xml.etree.ElementTree import Element, SubElement, tostring, register_namespace, Comment
 import yaml
 import jsonref
 
@@ -99,6 +99,12 @@ def indent_xml(element, level=0):
         element.tail = whitespace
 
 
+def add_comment_before_element(parent: Element, text: str):
+    if text and text.strip():
+        comment = Comment(" " + text.strip() + " ")
+        parent.append(comment)
+
+
 def schema_type(schema: dict):
     value = schema.get("type")
 
@@ -155,12 +161,14 @@ def add_status_type(schema_element: Element):
         {"base": "xs:string"},
     )
 
+    add_comment_before_element(restriction, "Operation succeeded")
     SubElement(
         restriction,
         xs_tag("enumeration"),
         {"value": "SUCCESS"},
     )
 
+    add_comment_before_element(restriction, "Operation failed")
     SubElement(
         restriction,
         xs_tag("enumeration"),
@@ -177,6 +185,7 @@ def add_error_types(schema_element: Element):
 
     details_sequence = SubElement(details_type, xs_tag("sequence"))
 
+    add_comment_before_element(details_sequence, "Error identification code")
     SubElement(
         details_sequence,
         xs_tag("element"),
@@ -188,6 +197,7 @@ def add_error_types(schema_element: Element):
         },
     )
 
+    add_comment_before_element(details_sequence, "Error diagnostic message")
     SubElement(
         details_sequence,
         xs_tag("element"),
@@ -207,6 +217,7 @@ def add_error_types(schema_element: Element):
 
     error_sequence = SubElement(error_type, xs_tag("sequence"))
 
+    add_comment_before_element(error_sequence, "Machine-readable error code")
     SubElement(
         error_sequence,
         xs_tag("element"),
@@ -218,6 +229,7 @@ def add_error_types(schema_element: Element):
         },
     )
 
+    add_comment_before_element(error_sequence, "Human-readable error message")
     SubElement(
         error_sequence,
         xs_tag("element"),
@@ -229,6 +241,7 @@ def add_error_types(schema_element: Element):
         },
     )
 
+    add_comment_before_element(error_sequence, "Error details (backend-specific)")
     SubElement(
         error_sequence,
         xs_tag("element"),
@@ -241,7 +254,12 @@ def add_error_types(schema_element: Element):
     )
 
 
-def add_enum_simple_type(schema_element: Element, type_name: str, values: list[str]):
+def add_enum_simple_type(schema_element: Element, type_name: str, values: list[str], generated_types: set[str]):
+    if type_name in generated_types:
+        return
+
+    generated_types.add(type_name)
+
     simple_type = SubElement(
         schema_element,
         xs_tag("simpleType"),
@@ -289,6 +307,8 @@ def add_complex_type(
             continue
 
         min_occurs = "1" if property_name in required else "0"
+        
+        description = property_schema.get("description", "")
 
         if is_array_schema(property_schema):
             item_schema = property_schema.get("items", {}) or {}
@@ -312,12 +332,14 @@ def add_complex_type(
                     schema_element,
                     enum_type_name,
                     item_schema["enum"],
+                    generated_types,
                 )
 
                 element_type = enum_type_name
             else:
                 element_type = infer_xs_type(item_schema)
 
+            add_comment_before_element(sequence, description)
             SubElement(
                 sequence,
                 xs_tag("element"),
@@ -341,6 +363,7 @@ def add_complex_type(
                 generated_types,
             )
 
+            add_comment_before_element(sequence, description)
             SubElement(
                 sequence,
                 xs_tag("element"),
@@ -361,12 +384,14 @@ def add_complex_type(
                 schema_element,
                 enum_type_name,
                 property_schema["enum"],
+                generated_types,
             )
 
             element_type = enum_type_name
         else:
             element_type = infer_xs_type(property_schema)
 
+        add_comment_before_element(sequence, description)
         SubElement(
             sequence,
             xs_tag("element"),
@@ -531,6 +556,7 @@ def generate_oic_xsd(operation_id: str, response_schema: dict) -> str:
 
     root_sequence = SubElement(root_type, xs_tag("sequence"))
 
+    add_comment_before_element(root_sequence, "Always present: SUCCESS or FAILED")
     SubElement(
         root_sequence,
         xs_tag("element"),
@@ -542,6 +568,7 @@ def generate_oic_xsd(operation_id: str, response_schema: dict) -> str:
         },
     )
 
+    add_comment_before_element(root_sequence, f"Filled on SUCCESS (from {data_property_name})")
     SubElement(
         root_sequence,
         xs_tag("element"),
@@ -553,6 +580,7 @@ def generate_oic_xsd(operation_id: str, response_schema: dict) -> str:
         },
     )
 
+    add_comment_before_element(root_sequence, "Filled on FAILED; maxOccurs=unbounded → serialized as JSON array")
     SubElement(
         root_sequence,
         xs_tag("element"),

@@ -69,13 +69,16 @@
         "type": "object",
         "properties": {
           "name": {
-            "type": "string"
+            "type": "string",
+            "description": "The item name (required)"
           },
           "description": {
-            "type": "string"
+            "type": "string",
+            "description": "Optional item description"
           },
           "price": {
-            "type": "number"
+            "type": "number",
+            "description": "Item price in EUR (required)"
           }
         },
         "required": ["name", "price"],
@@ -86,22 +89,28 @@
         "properties": {
           "status": {
             "type": "string",
-            "enum": ["SUCCESS", "FAILED"]
+            "enum": ["SUCCESS", "FAILED"],
+            "description": "Operation status"
           },
           "item": {
             "type": "object",
+            "description": "Item details (present on success)",
             "properties": {
               "itemId": {
-                "type": "string"
+                "type": "string",
+                "description": "Unique item identifier"
               },
               "name": {
-                "type": "string"
+                "type": "string",
+                "description": "Item name"
               },
               "description": {
-                "type": "string"
+                "type": "string",
+                "description": "Item description"
               },
               "price": {
-                "type": "number"
+                "type": "number",
+                "description": "Item price in EUR"
               }
             },
             "required": ["itemId", "name", "price"],
@@ -109,14 +118,17 @@
           },
           "errors": {
             "type": "array",
+            "description": "Error details (present on failure)",
             "items": {
               "type": "object",
               "properties": {
                 "code": {
-                  "type": "string"
+                  "type": "string",
+                  "description": "Error code"
                 },
                 "message": {
-                  "type": "string"
+                  "type": "string",
+                  "description": "Error message"
                 }
               },
               "required": ["code", "message"]
