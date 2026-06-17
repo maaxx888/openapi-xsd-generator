@@ -443,7 +443,7 @@ def find_success_response(operation: dict) -> tuple[str, dict] | tuple[None, Non
     return None, None
 
 
-def detect_data_property(response_schema: dict) -> tuple[str, dict]:
+def detect_data_property(response_schema: dict) -> tuple[str, dict] | tuple[None, None]:
     properties = response_schema.get("properties", {}) or {}
 
     ignored_properties = {"status", "errors"}
@@ -452,10 +452,7 @@ def detect_data_property(response_schema: dict) -> tuple[str, dict]:
         if property_name not in ignored_properties:
             return property_name, property_schema
 
-    raise ValueError(
-        "Could not detect the data property. "
-        "Expected success envelope like { status, person } or { status, enterprise }."
-    )
+    return None, None
 
 
 def operation_root_name(operation_id: str) -> str:
@@ -530,7 +527,6 @@ def generate_oic_xsd(operation_id: str, response_schema: dict) -> str:
     root_type_name = root_name + "Type"
 
     data_property_name, data_property_schema = detect_data_property(response_schema)
-    data_type_name = pascal_case(data_property_name) + "ResponseType"
 
     schema_element = Element(
         xs_tag("schema"),
@@ -568,17 +564,42 @@ def generate_oic_xsd(operation_id: str, response_schema: dict) -> str:
         },
     )
 
-    add_comment_before_element(root_sequence, f"Filled on SUCCESS (from {data_property_name})")
-    SubElement(
-        root_sequence,
-        xs_tag("element"),
-        {
-            "name": data_property_name,
-            "type": data_type_name,
-            "minOccurs": "0",
-            "maxOccurs": "1",
-        },
-    )
+    generated_types = set()
+
+    if data_property_name is not None:
+        data_type_name = pascal_case(data_property_name) + "ResponseType"
+
+        add_comment_before_element(root_sequence, f"Filled on SUCCESS (from {data_property_name})")
+        SubElement(
+            root_sequence,
+            xs_tag("element"),
+            {
+                "name": data_property_name,
+                "type": data_type_name,
+                "minOccurs": "0",
+                "maxOccurs": "1",
+            },
+        )
+
+        if is_array_schema(data_property_schema):
+            item_schema = data_property_schema.get("items", {}) or {}
+            add_complex_type(
+                schema_element,
+                data_type_name,
+                item_schema,
+                generated_types,
+            )
+        elif is_object_schema(data_property_schema):
+            add_complex_type(
+                schema_element,
+                data_type_name,
+                data_property_schema,
+                generated_types,
+            )
+        else:
+            raise ValueError(
+                f"Data property '{data_property_name}' must be an object or array."
+            )
 
     add_comment_before_element(root_sequence, "Filled on FAILED; maxOccurs=unbounded → serialized as JSON array")
     SubElement(
@@ -594,28 +615,6 @@ def generate_oic_xsd(operation_id: str, response_schema: dict) -> str:
 
     add_status_type(schema_element)
     add_error_types(schema_element)
-
-    generated_types = set()
-
-    if is_array_schema(data_property_schema):
-        item_schema = data_property_schema.get("items", {}) or {}
-        add_complex_type(
-            schema_element,
-            data_type_name,
-            item_schema,
-            generated_types,
-        )
-    elif is_object_schema(data_property_schema):
-        add_complex_type(
-            schema_element,
-            data_type_name,
-            data_property_schema,
-            generated_types,
-        )
-    else:
-        raise ValueError(
-            f"Data property '{data_property_name}' must be an object or array."
-        )
 
     indent_xml(schema_element)
 
@@ -708,19 +707,6 @@ def process_openapi(openapi_path: Path, output_base_dir: Path):
                         "path": api_path,
                         "method": method_upper(method_lower),
                         "reason": "No application/json schema found on success response",
-                    }
-                )
-                continue
-
-            try:
-                detect_data_property(response_schema)
-            except ValueError as error:
-                skipped_results.append(
-                    {
-                        "operationId": operation_id,
-                        "path": api_path,
-                        "method": method_upper(method_lower),
-                        "reason": str(error),
                     }
                 )
                 continue

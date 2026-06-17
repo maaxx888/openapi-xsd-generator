@@ -1,0 +1,66 @@
+{
+  "type": "object",
+  "properties": {
+    "status": {
+      "type": "string",
+      "enum": [
+        "SUCCESS",
+        "FAILED"
+      ],
+      "description": "Operation status"
+    },
+    "item": {
+      "type": "object",
+      "description": "Item details (present on success)",
+      "properties": {
+        "itemId": {
+          "type": "string",
+          "description": "Unique item identifier"
+        },
+        "name": {
+          "type": "string",
+          "description": "Item name"
+        },
+        "description": {
+          "type": "string",
+          "description": "Item description"
+        },
+        "price": {
+          "type": "number",
+          "description": "Item price in EUR"
+        }
+      },
+      "required": [
+        "itemId",
+        "name",
+        "price"
+      ],
+      "additionalProperties": false
+    },
+    "errors": {
+      "type": "array",
+      "description": "Error details (present on failure)",
+      "items": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "Error code"
+          },
+          "message": {
+            "type": "string",
+            "description": "Error message"
+          }
+        },
+        "required": [
+          "code",
+          "message"
+        ]
+      }
+    }
+  },
+  "required": [
+    "status"
+  ],
+  "additionalProperties": false
+}
