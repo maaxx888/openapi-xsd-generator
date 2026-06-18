@@ -1245,7 +1245,7 @@ def process_openapi(openapi_path: Path, output_base_dir: Path):
                         output_base_dir
                         / "schemas"
                         / "error"
-                        / f"{operation_file_name}.json"
+                        / f"{kebab_case(operation_id)}-error-response.json"
                     )
                     write_json_file(error_json_path, merged_error_schema)
                     result["errorJsonSchemaPath"] = error_json_path
