@@ -4,6 +4,10 @@ Generate **XML Schema (XSD)** and **JSON Schema** files from **OpenAPI 3.x** spe
 
 The tool keeps OpenAPI as the single source of truth and produces OIC-ready polymorphic response XSDs, plain request XSDs, and merged JSON schemas for documentation and validation.
 
+## Author
+
+Created by **[Maxime Frankefort](https://github.com/maaxx888)**
+
 ## Related documentation
 
 | Document | Purpose |
@@ -353,7 +357,7 @@ For CI/CD, run the generator after OpenAPI changes and commit the `generated/` o
 
 ## License
 
-Apache License 2.0 (license file to be added).
+Apache License 2.0. See [LICENSE](LICENSE) file for details.
 
 ---
 
