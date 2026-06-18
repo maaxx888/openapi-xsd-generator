@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import argparse
+import copy
 import json
 import re
 import sys
@@ -22,6 +23,17 @@ HTTP_METHODS = {
     "options",
     "head",
 }
+
+FACET_KEYS = (
+    "pattern",
+    "minLength",
+    "maxLength",
+    "minimum",
+    "maximum",
+    "exclusiveMinimum",
+    "exclusiveMaximum",
+    "multipleOf",
+)
 
 
 def load_document(path: Path) -> dict:
@@ -105,6 +117,14 @@ def add_comment_before_element(parent: Element, text: str):
         parent.append(comment)
 
 
+def add_section_header(parent: Element, title: str):
+    if title and title.strip():
+        separator = "=" * 60
+        comment_text = f"\n{separator}\n{title.strip()}\n{separator}\n"
+        comment = Comment(comment_text)
+        parent.append(comment)
+
+
 def schema_type(schema: dict):
     value = schema.get("type")
 
@@ -117,21 +137,246 @@ def schema_type(schema: dict):
     return value
 
 
+def is_nullable(schema: dict) -> bool:
+    if schema.get("nullable"):
+        return True
+
+    schema_type_value = schema.get("type")
+    if isinstance(schema_type_value, list) and "null" in schema_type_value:
+        return True
+
+    return False
+
+
 def is_object_schema(schema: dict) -> bool:
+    if not isinstance(schema, dict):
+        return False
+
     return schema_type(schema) == "object" or "properties" in schema
 
 
 def is_array_schema(schema: dict) -> bool:
+    if not isinstance(schema, dict):
+        return False
+
     return schema_type(schema) == "array"
+
+
+def has_constraint_facets(schema: dict) -> bool:
+    return any(key in schema for key in FACET_KEYS)
+
+
+def needs_named_simple_type(schema: dict) -> bool:
+    return "enum" in schema or has_constraint_facets(schema)
+
+
+def build_description(schema: dict) -> str:
+    parts = []
+
+    if schema.get("description"):
+        parts.append(str(schema["description"]).strip())
+
+    if "default" in schema:
+        parts.append(f"Default: {schema['default']}")
+
+    if "example" in schema:
+        parts.append(f"Example: {schema['example']}")
+
+    if schema.get("readOnly"):
+        parts.append("Read-only")
+
+    if schema.get("writeOnly"):
+        parts.append("Write-only")
+
+    if schema.get("deprecated"):
+        parts.append("Deprecated")
+
+    if is_nullable(schema):
+        parts.append("Nullable")
+
+    if schema.get("additionalProperties") is False:
+        parts.append("additionalProperties: false")
+
+    return " | ".join(parts)
+
+
+def deep_merge_schemas(
+    base: dict,
+    overlay: dict,
+    required_mode: str = "intersection",
+) -> dict:
+    if not base:
+        return copy.deepcopy(overlay)
+
+    if not overlay:
+        return copy.deepcopy(base)
+
+    result = copy.deepcopy(base)
+
+    for key, value in overlay.items():
+        if key == "properties":
+            overlay_properties = value or {}
+            result_properties = result.setdefault("properties", {})
+
+            for property_name, property_schema in overlay_properties.items():
+                if property_name in result_properties:
+                    result_properties[property_name] = deep_merge_schemas(
+                        result_properties[property_name],
+                        property_schema,
+                        required_mode=required_mode,
+                    )
+                else:
+                    result_properties[property_name] = copy.deepcopy(property_schema)
+        elif key == "required":
+            overlay_required = set(value or [])
+            base_required = set(result.get("required", []) or [])
+
+            if required_mode == "union":
+                result["required"] = sorted(base_required | overlay_required)
+            else:
+                result["required"] = sorted(base_required & overlay_required)
+        elif key == "enum":
+            combined = list(
+                dict.fromkeys((result.get("enum", []) or []) + (value or []))
+            )
+            result["enum"] = combined
+        elif key in ("minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum"):
+            if key not in result:
+                result[key] = value
+        elif key in ("minLength", "maxLength", "pattern", "multipleOf"):
+            if key not in result:
+                result[key] = value
+        elif key in ("minItems", "maxItems"):
+            if key not in result:
+                result[key] = value
+        elif isinstance(value, dict) and isinstance(result.get(key), dict):
+            result[key] = deep_merge_schemas(
+                result[key],
+                value,
+                required_mode=required_mode,
+            )
+        elif key not in result:
+            result[key] = copy.deepcopy(value)
+
+    return result
+
+
+def merge_schema_branches(branches: list[dict]) -> dict:
+    merged = {}
+
+    for branch in branches:
+        if isinstance(branch, dict):
+            merged = deep_merge_schemas(merged, branch, required_mode="union")
+
+    return merged
+
+
+def resolve_schema(schema: dict) -> dict:
+    if not isinstance(schema, dict):
+        return schema
+
+    combinator_keys = ("allOf", "oneOf", "anyOf")
+    combinator_present = any(key in schema for key in combinator_keys)
+
+    if combinator_present:
+        merged = {}
+
+        if "allOf" in schema:
+            for sub_schema in schema["allOf"]:
+                merged = deep_merge_schemas(
+                    merged,
+                    resolve_schema(sub_schema),
+                    required_mode="union",
+                )
+
+        if "oneOf" in schema:
+            branches = [resolve_schema(sub_schema) for sub_schema in schema["oneOf"]]
+            merged = deep_merge_schemas(
+                merged,
+                merge_schema_branches(branches),
+                required_mode="union",
+            )
+
+        if "anyOf" in schema:
+            branches = [resolve_schema(sub_schema) for sub_schema in schema["anyOf"]]
+            merged = deep_merge_schemas(
+                merged,
+                merge_schema_branches(branches),
+                required_mode="union",
+            )
+
+        remaining = {
+            key: value
+            for key, value in schema.items()
+            if key not in combinator_keys
+        }
+
+        if remaining:
+            merged = deep_merge_schemas(merged, resolve_schema(remaining))
+
+        schema = merged
+
+    result = copy.deepcopy(schema)
+
+    if "properties" in result:
+        result["properties"] = {
+            property_name: resolve_schema(property_schema)
+            for property_name, property_schema in (result.get("properties") or {}).items()
+        }
+
+    if "items" in result and isinstance(result["items"], dict):
+        result["items"] = resolve_schema(result["items"])
+
+    return result
 
 
 def infer_xs_type(schema: dict) -> str:
     current_type = schema_type(schema)
     current_format = schema.get("format")
+    content_media_type = schema.get("contentMediaType")
+    content_encoding = schema.get("contentEncoding")
 
     if current_type == "string":
-        # For OIC JSON serialization, xs:string is safest for dates.
-        # OIC will still output JSON strings.
+        if current_format:
+            if current_format == "date":
+                return "xs:date"
+            elif current_format in ("date-time", "datetime"):
+                return "xs:dateTime"
+            elif current_format == "time":
+                return "xs:time"
+            elif current_format == "duration":
+                return "xs:duration"
+            elif current_format in (
+                "uuid",
+                "email",
+                "hostname",
+                "ipv4",
+                "ipv6",
+                "uri",
+                "uri-reference",
+                "iri",
+                "iri-reference",
+                "regex",
+                "json-pointer",
+                "relative-json-pointer",
+                "uri-template",
+                "password",
+            ):
+                return "xs:string"
+            elif current_format == "byte":
+                if content_encoding in ("base64", "base64url"):
+                    return "xs:base64Binary"
+                return "xs:base64Binary"
+            elif current_format == "binary":
+                if content_encoding in ("base64", "base64url"):
+                    return "xs:base64Binary"
+                return "xs:hexBinary"
+
+        if content_media_type:
+            if content_encoding in ("base64", "base64url"):
+                return "xs:base64Binary"
+            return "xs:hexBinary"
+
         return "xs:string"
 
     if current_type == "integer":
@@ -140,6 +385,10 @@ def infer_xs_type(schema: dict) -> str:
         return "xs:int"
 
     if current_type == "number":
+        if current_format == "float":
+            return "xs:float"
+        elif current_format == "double":
+            return "xs:double"
         return "xs:decimal"
 
     if current_type == "boolean":
@@ -148,7 +397,324 @@ def infer_xs_type(schema: dict) -> str:
     return "xs:string"
 
 
-def add_status_type(schema_element: Element):
+def xs_base_supports_string_facets(base_type: str) -> bool:
+    local_name = base_type.replace("xs:", "")
+    return local_name in (
+        "string",
+        "date",
+        "dateTime",
+        "time",
+        "duration",
+        "token",
+        "normalizedString",
+    )
+
+
+def xs_base_supports_numeric_facets(base_type: str) -> bool:
+    local_name = base_type.replace("xs:", "")
+    return local_name in ("int", "long", "decimal", "float", "double", "byte", "short")
+
+
+def apply_numeric_facets(restriction: Element, schema: dict):
+    minimum = schema.get("minimum")
+    maximum = schema.get("maximum")
+    exclusive_minimum = schema.get("exclusiveMinimum")
+    exclusive_maximum = schema.get("exclusiveMaximum")
+
+    if exclusive_minimum is True and minimum is not None:
+        SubElement(restriction, xs_tag("minExclusive"), {"value": str(minimum)})
+    elif isinstance(exclusive_minimum, (int, float)):
+        SubElement(restriction, xs_tag("minExclusive"), {"value": str(exclusive_minimum)})
+    elif minimum is not None:
+        SubElement(restriction, xs_tag("minInclusive"), {"value": str(minimum)})
+
+    if exclusive_maximum is True and maximum is not None:
+        SubElement(restriction, xs_tag("maxExclusive"), {"value": str(maximum)})
+    elif isinstance(exclusive_maximum, (int, float)):
+        SubElement(restriction, xs_tag("maxExclusive"), {"value": str(exclusive_maximum)})
+    elif maximum is not None:
+        SubElement(restriction, xs_tag("maxInclusive"), {"value": str(maximum)})
+
+    if "multipleOf" in schema:
+        add_comment_before_element(
+            restriction,
+            f"multipleOf: {schema['multipleOf']} (not enforced in XSD 1.0)",
+        )
+
+
+def apply_string_facets(restriction: Element, schema: dict, base_type: str):
+    if not xs_base_supports_string_facets(base_type):
+        return
+
+    if "minLength" in schema:
+        SubElement(
+            restriction,
+            xs_tag("minLength"),
+            {"value": str(schema["minLength"])},
+        )
+
+    if "maxLength" in schema:
+        SubElement(
+            restriction,
+            xs_tag("maxLength"),
+            {"value": str(schema["maxLength"])},
+        )
+
+    if "pattern" in schema:
+        SubElement(
+            restriction,
+            xs_tag("pattern"),
+            {"value": schema["pattern"]},
+        )
+
+
+def apply_schema_facets(restriction: Element, schema: dict, base_type: str):
+    apply_string_facets(restriction, schema, base_type)
+
+    if xs_base_supports_numeric_facets(base_type):
+        apply_numeric_facets(restriction, schema)
+
+
+def add_restricted_simple_type(
+    schema_element: Element,
+    type_name: str,
+    schema: dict,
+    generated_types: set[str],
+):
+    if type_name in generated_types:
+        return
+
+    generated_types.add(type_name)
+    schema = resolve_schema(schema)
+    base_type = infer_xs_type(schema)
+
+    add_section_header(schema_element, type_name)
+    simple_type = SubElement(
+        schema_element,
+        xs_tag("simpleType"),
+        {"name": type_name},
+    )
+
+    restriction = SubElement(
+        simple_type,
+        xs_tag("restriction"),
+        {"base": base_type},
+    )
+
+    if "enum" in schema:
+        for value in schema["enum"]:
+            SubElement(
+                restriction,
+                xs_tag("enumeration"),
+                {"value": str(value)},
+            )
+
+    apply_schema_facets(restriction, schema, base_type)
+
+
+def get_or_create_element_type(
+    schema_element: Element,
+    type_name: str,
+    schema: dict,
+    generated_types: set[str],
+) -> str:
+    schema = resolve_schema(schema)
+
+    if needs_named_simple_type(schema):
+        add_restricted_simple_type(schema_element, type_name, schema, generated_types)
+        return type_name
+
+    return infer_xs_type(schema)
+
+
+def property_min_occurs(property_name: str, property_schema: dict, required: set[str]) -> str:
+    if is_nullable(property_schema):
+        return "0"
+
+    return "1" if property_name in required else "0"
+
+
+def array_occurs(
+    property_name: str,
+    property_schema: dict,
+    required: set[str],
+) -> tuple[str, str]:
+    min_items = property_schema.get("minItems")
+    max_items = property_schema.get("maxItems")
+
+    if min_items is not None:
+        min_occurs = str(min_items)
+    else:
+        min_occurs = property_min_occurs(property_name, property_schema, required)
+
+    max_occurs = str(max_items) if max_items is not None else "unbounded"
+    return min_occurs, max_occurs
+
+
+def nested_type_name(parent_type_name: str, property_name: str, suffix: str = "Type") -> str:
+    parent_base = parent_type_name
+    if parent_base.endswith("Type"):
+        parent_base = parent_base[:-4]
+
+    return parent_base + pascal_case(property_name) + suffix
+
+
+def add_property_element(
+    sequence: Element,
+    schema_element: Element,
+    property_name: str,
+    property_schema: dict,
+    required: set[str],
+    generated_types: set[str],
+    parent_type_name: str,
+    skip_names: set[str] | None = None,
+):
+    if skip_names and property_name in skip_names:
+        return
+
+    property_schema = resolve_schema(property_schema)
+    description = build_description(property_schema)
+
+    if is_array_schema(property_schema):
+        item_schema = property_schema.get("items", {}) or {}
+        item_schema = resolve_schema(item_schema)
+        min_occurs, max_occurs = array_occurs(property_name, property_schema, required)
+
+        if is_object_schema(item_schema):
+            item_type_name = nested_type_name(
+                parent_type_name,
+                singular_name(property_name),
+                "ItemType",
+            )
+            add_complex_type(
+                schema_element,
+                item_type_name,
+                item_schema,
+                generated_types,
+            )
+            element_type = item_type_name
+        else:
+            item_type_name = nested_type_name(
+                parent_type_name,
+                singular_name(property_name),
+                "ItemType",
+            )
+            element_type = get_or_create_element_type(
+                schema_element,
+                item_type_name,
+                item_schema,
+                generated_types,
+            )
+
+        add_comment_before_element(sequence, description)
+        SubElement(
+            sequence,
+            xs_tag("element"),
+            {
+                "name": property_name,
+                "type": element_type,
+                "minOccurs": min_occurs,
+                "maxOccurs": max_occurs,
+            },
+        )
+        return
+
+    if is_object_schema(property_schema):
+        child_type_name = nested_type_name(parent_type_name, property_name)
+        add_complex_type(
+            schema_element,
+            child_type_name,
+            property_schema,
+            generated_types,
+        )
+
+        add_comment_before_element(sequence, description)
+        SubElement(
+            sequence,
+            xs_tag("element"),
+            {
+                "name": property_name,
+                "type": child_type_name,
+                "minOccurs": property_min_occurs(property_name, property_schema, required),
+                "maxOccurs": "1",
+            },
+        )
+        return
+
+    type_name = nested_type_name(parent_type_name, property_name)
+    element_type = get_or_create_element_type(
+        schema_element,
+        type_name,
+        property_schema,
+        generated_types,
+    )
+
+    add_comment_before_element(sequence, description)
+    SubElement(
+        sequence,
+        xs_tag("element"),
+        {
+            "name": property_name,
+            "type": element_type,
+            "minOccurs": property_min_occurs(property_name, property_schema, required),
+            "maxOccurs": "1",
+        },
+    )
+
+
+def add_complex_type(
+    schema_element: Element,
+    type_name: str,
+    json_schema: dict,
+    generated_types: set[str],
+    skip_names: set[str] | None = None,
+):
+    if type_name in generated_types:
+        return
+
+    generated_types.add(type_name)
+    json_schema = resolve_schema(json_schema)
+
+    add_section_header(schema_element, type_name)
+
+    type_description = build_description(json_schema)
+    if type_description:
+        add_comment_before_element(schema_element, type_description)
+
+    complex_type = SubElement(
+        schema_element,
+        xs_tag("complexType"),
+        {"name": type_name},
+    )
+
+    sequence = SubElement(complex_type, xs_tag("sequence"))
+    properties = json_schema.get("properties", {}) or {}
+    required = set(json_schema.get("required", []) or [])
+
+    for property_name, property_schema in properties.items():
+        add_property_element(
+            sequence,
+            schema_element,
+            property_name,
+            property_schema,
+            required,
+            generated_types,
+            type_name,
+            skip_names=skip_names,
+        )
+
+
+def add_status_type(schema_element: Element, response_schema: dict | None = None):
+    status_values = ["SUCCESS", "FAILED"]
+
+    if response_schema:
+        status_schema = (response_schema.get("properties", {}) or {}).get("status")
+        if status_schema:
+            status_schema = resolve_schema(status_schema)
+            if "enum" in status_schema:
+                status_values = list(dict.fromkeys(status_schema["enum"]))
+
+    add_section_header(schema_element, "StatusType")
     simple_type = SubElement(
         schema_element,
         xs_tag("simpleType"),
@@ -161,118 +727,7 @@ def add_status_type(schema_element: Element):
         {"base": "xs:string"},
     )
 
-    add_comment_before_element(restriction, "Operation succeeded")
-    SubElement(
-        restriction,
-        xs_tag("enumeration"),
-        {"value": "SUCCESS"},
-    )
-
-    add_comment_before_element(restriction, "Operation failed")
-    SubElement(
-        restriction,
-        xs_tag("enumeration"),
-        {"value": "FAILED"},
-    )
-
-
-def add_error_types(schema_element: Element):
-    details_type = SubElement(
-        schema_element,
-        xs_tag("complexType"),
-        {"name": "ErrorDetailsType"},
-    )
-
-    details_sequence = SubElement(details_type, xs_tag("sequence"))
-
-    add_comment_before_element(details_sequence, "Error identification code")
-    SubElement(
-        details_sequence,
-        xs_tag("element"),
-        {
-            "name": "identification",
-            "type": "xs:string",
-            "minOccurs": "0",
-            "maxOccurs": "1",
-        },
-    )
-
-    add_comment_before_element(details_sequence, "Error diagnostic message")
-    SubElement(
-        details_sequence,
-        xs_tag("element"),
-        {
-            "name": "diagnose",
-            "type": "xs:string",
-            "minOccurs": "0",
-            "maxOccurs": "1",
-        },
-    )
-
-    error_type = SubElement(
-        schema_element,
-        xs_tag("complexType"),
-        {"name": "ErrorItemType"},
-    )
-
-    error_sequence = SubElement(error_type, xs_tag("sequence"))
-
-    add_comment_before_element(error_sequence, "Machine-readable error code")
-    SubElement(
-        error_sequence,
-        xs_tag("element"),
-        {
-            "name": "code",
-            "type": "xs:string",
-            "minOccurs": "1",
-            "maxOccurs": "1",
-        },
-    )
-
-    add_comment_before_element(error_sequence, "Human-readable error message")
-    SubElement(
-        error_sequence,
-        xs_tag("element"),
-        {
-            "name": "message",
-            "type": "xs:string",
-            "minOccurs": "1",
-            "maxOccurs": "1",
-        },
-    )
-
-    add_comment_before_element(error_sequence, "Error details (backend-specific)")
-    SubElement(
-        error_sequence,
-        xs_tag("element"),
-        {
-            "name": "details",
-            "type": "ErrorDetailsType",
-            "minOccurs": "0",
-            "maxOccurs": "1",
-        },
-    )
-
-
-def add_enum_simple_type(schema_element: Element, type_name: str, values: list[str], generated_types: set[str]):
-    if type_name in generated_types:
-        return
-
-    generated_types.add(type_name)
-
-    simple_type = SubElement(
-        schema_element,
-        xs_tag("simpleType"),
-        {"name": type_name},
-    )
-
-    restriction = SubElement(
-        simple_type,
-        xs_tag("restriction"),
-        {"base": "xs:string"},
-    )
-
-    for value in values:
+    for value in status_values:
         SubElement(
             restriction,
             xs_tag("enumeration"),
@@ -280,128 +735,69 @@ def add_enum_simple_type(schema_element: Element, type_name: str, values: list[s
         )
 
 
-def add_complex_type(
+def add_error_types_from_schema(
     schema_element: Element,
-    type_name: str,
-    json_schema: dict,
+    response_schema: dict,
     generated_types: set[str],
 ):
-    if type_name in generated_types:
+    errors_schema = (response_schema.get("properties", {}) or {}).get("errors")
+
+    if not errors_schema:
+        add_fallback_error_types(schema_element, generated_types)
         return
 
-    generated_types.add(type_name)
+    errors_schema = resolve_schema(errors_schema)
+    item_schema = errors_schema.get("items", {}) or {}
+    item_schema = resolve_schema(item_schema)
 
-    complex_type = SubElement(
+    if is_object_schema(item_schema):
+        add_complex_type(
+            schema_element,
+            "ErrorItemType",
+            item_schema,
+            generated_types,
+        )
+        return
+
+    add_fallback_error_types(schema_element, generated_types)
+
+
+def add_fallback_error_types(schema_element: Element, generated_types: set[str]):
+    details_type_schema = {
+        "type": "object",
+        "properties": {
+            "identification": {"type": "string", "description": "Error identification code"},
+            "diagnose": {"type": "string", "description": "Error diagnostic message"},
+        },
+    }
+
+    add_complex_type(
         schema_element,
-        xs_tag("complexType"),
-        {"name": type_name},
+        "ErrorDetailsType",
+        details_type_schema,
+        generated_types,
     )
 
-    sequence = SubElement(complex_type, xs_tag("sequence"))
-
-    properties = json_schema.get("properties", {}) or {}
-    required = set(json_schema.get("required", []) or [])
-
-    for property_name, property_schema in properties.items():
-        if property_name in ["status", "errors"]:
-            continue
-
-        min_occurs = "1" if property_name in required else "0"
-        
-        description = property_schema.get("description", "")
-
-        if is_array_schema(property_schema):
-            item_schema = property_schema.get("items", {}) or {}
-
-            if is_object_schema(item_schema):
-                base_name = singular_name(property_name)
-                item_type_name = pascal_case(base_name) + "ItemType"
-
-                add_complex_type(
-                    schema_element,
-                    item_type_name,
-                    item_schema,
-                    generated_types,
-                )
-
-                element_type = item_type_name
-            elif "enum" in item_schema:
-                enum_type_name = pascal_case(singular_name(property_name)) + "Type"
-
-                add_enum_simple_type(
-                    schema_element,
-                    enum_type_name,
-                    item_schema["enum"],
-                    generated_types,
-                )
-
-                element_type = enum_type_name
-            else:
-                element_type = infer_xs_type(item_schema)
-
-            add_comment_before_element(sequence, description)
-            SubElement(
-                sequence,
-                xs_tag("element"),
-                {
-                    "name": property_name,
-                    "type": element_type,
-                    "minOccurs": min_occurs,
-                    "maxOccurs": "unbounded",
-                },
-            )
-
-            continue
-
-        if is_object_schema(property_schema):
-            child_type_name = pascal_case(property_name) + "Type"
-
-            add_complex_type(
-                schema_element,
-                child_type_name,
-                property_schema,
-                generated_types,
-            )
-
-            add_comment_before_element(sequence, description)
-            SubElement(
-                sequence,
-                xs_tag("element"),
-                {
-                    "name": property_name,
-                    "type": child_type_name,
-                    "minOccurs": min_occurs,
-                    "maxOccurs": "1",
-                },
-            )
-
-            continue
-
-        if "enum" in property_schema:
-            enum_type_name = pascal_case(property_name) + "Type"
-
-            add_enum_simple_type(
-                schema_element,
-                enum_type_name,
-                property_schema["enum"],
-                generated_types,
-            )
-
-            element_type = enum_type_name
-        else:
-            element_type = infer_xs_type(property_schema)
-
-        add_comment_before_element(sequence, description)
-        SubElement(
-            sequence,
-            xs_tag("element"),
-            {
-                "name": property_name,
-                "type": element_type,
-                "minOccurs": min_occurs,
-                "maxOccurs": "1",
+    error_item_schema = {
+        "type": "object",
+        "required": ["code", "message"],
+        "properties": {
+            "code": {"type": "string", "description": "Machine-readable error code"},
+            "message": {"type": "string", "description": "Human-readable error message"},
+            "details": {
+                "type": "object",
+                "description": "Error details (backend-specific)",
+                "properties": details_type_schema["properties"],
             },
-        )
+        },
+    }
+
+    add_complex_type(
+        schema_element,
+        "ErrorItemType",
+        error_item_schema,
+        generated_types,
+    )
 
 
 def find_json_response_schema(response: dict) -> dict | None:
@@ -433,6 +829,42 @@ def find_json_request_schema(request_body: dict) -> dict | None:
     return None
 
 
+def merge_response_schemas_with_errors(operation: dict) -> dict | None:
+    responses = operation.get("responses", {}) or {}
+
+    success_schema = None
+    error_schemas = []
+
+    for status_code, response in responses.items():
+        status_int = int(status_code) if status_code.isdigit() else None
+
+        if status_int in (200, 201):
+            success_schema = find_json_response_schema(response)
+        elif status_int and status_int >= 400:
+            error_schema = find_json_response_schema(response)
+            if error_schema:
+                error_schemas.append(error_schema)
+
+    if not success_schema:
+        return None
+
+    success_schema = resolve_schema(success_schema)
+
+    if not error_schemas:
+        return success_schema
+
+    merged_schema = success_schema
+
+    for error_schema in error_schemas:
+        merged_schema = deep_merge_schemas(
+            merged_schema,
+            resolve_schema(error_schema),
+            required_mode="intersection",
+        )
+
+    return merged_schema
+
+
 def find_success_response(operation: dict) -> tuple[str, dict] | tuple[None, None]:
     responses = operation.get("responses", {}) or {}
 
@@ -443,16 +875,15 @@ def find_success_response(operation: dict) -> tuple[str, dict] | tuple[None, Non
     return None, None
 
 
-def detect_data_property(response_schema: dict) -> tuple[str, dict] | tuple[None, None]:
+def detect_data_properties(response_schema: dict) -> list[tuple[str, dict]]:
     properties = response_schema.get("properties", {}) or {}
-
     ignored_properties = {"status", "errors"}
 
-    for property_name, property_schema in properties.items():
-        if property_name not in ignored_properties:
-            return property_name, property_schema
-
-    return None, None
+    return [
+        (property_name, property_schema)
+        for property_name, property_schema in properties.items()
+        if property_name not in ignored_properties
+    ]
 
 
 def operation_root_name(operation_id: str) -> str:
@@ -467,6 +898,7 @@ def operation_root_name(operation_id: str) -> str:
 def generate_oic_request_xsd(operation_id: str, request_schema: dict) -> str:
     root_name = pascal_case(operation_id) + "Request"
     root_type_name = root_name + "Type"
+    request_schema = resolve_schema(request_schema)
 
     schema_element = Element(
         xs_tag("schema"),
@@ -502,15 +934,11 @@ def generate_oic_request_xsd(operation_id: str, request_schema: dict) -> str:
             generated_types,
         )
     else:
-        simple_type = SubElement(
+        add_restricted_simple_type(
             schema_element,
-            xs_tag("simpleType"),
-            {"name": root_type_name},
-        )
-        restriction = SubElement(
-            simple_type,
-            xs_tag("restriction"),
-            {"base": infer_xs_type(request_schema)},
+            root_type_name,
+            request_schema,
+            generated_types,
         )
 
     indent_xml(schema_element)
@@ -522,11 +950,57 @@ def generate_oic_request_xsd(operation_id: str, request_schema: dict) -> str:
     ).decode("utf-8")
 
 
+def add_data_property_to_xsd(
+    schema_element: Element,
+    root_sequence: Element,
+    data_property_name: str,
+    data_property_schema: dict,
+    generated_types: set[str],
+):
+    data_property_schema = resolve_schema(data_property_schema)
+    data_type_name = pascal_case(data_property_name) + "ResponseType"
+
+    add_comment_before_element(
+        root_sequence,
+        f"Filled on SUCCESS (from {data_property_name})",
+    )
+    SubElement(
+        root_sequence,
+        xs_tag("element"),
+        {
+            "name": data_property_name,
+            "type": data_type_name,
+            "minOccurs": "0",
+            "maxOccurs": "1",
+        },
+    )
+
+    if is_array_schema(data_property_schema):
+        item_schema = data_property_schema.get("items", {}) or {}
+        add_complex_type(
+            schema_element,
+            data_type_name,
+            item_schema,
+            generated_types,
+        )
+    elif is_object_schema(data_property_schema):
+        add_complex_type(
+            schema_element,
+            data_type_name,
+            data_property_schema,
+            generated_types,
+        )
+    else:
+        raise ValueError(
+            f"Data property '{data_property_name}' must be an object or array."
+        )
+
+
 def generate_oic_xsd(operation_id: str, response_schema: dict) -> str:
+    response_schema = resolve_schema(response_schema)
     root_name = operation_root_name(operation_id)
     root_type_name = root_name + "Type"
-
-    data_property_name, data_property_schema = detect_data_property(response_schema)
+    data_properties = detect_data_properties(response_schema)
 
     schema_element = Element(
         xs_tag("schema"),
@@ -534,6 +1008,16 @@ def generate_oic_xsd(operation_id: str, response_schema: dict) -> str:
             "elementFormDefault": "unqualified",
         },
     )
+
+    header_comment = f"""
+Generated from OpenAPI specification
+Operation: {operation_id}
+Type: Response (Success + Error polymorphic schema)
+Root element: {root_name}
+    """
+    add_comment_before_element(schema_element, header_comment)
+
+    add_section_header(schema_element, "Root Element")
 
     SubElement(
         schema_element,
@@ -543,6 +1027,8 @@ def generate_oic_xsd(operation_id: str, response_schema: dict) -> str:
             "type": root_type_name,
         },
     )
+
+    add_section_header(schema_element, f"{root_type_name} - Root Type")
 
     root_type = SubElement(
         schema_element,
@@ -566,42 +1052,19 @@ def generate_oic_xsd(operation_id: str, response_schema: dict) -> str:
 
     generated_types = set()
 
-    if data_property_name is not None:
-        data_type_name = pascal_case(data_property_name) + "ResponseType"
-
-        add_comment_before_element(root_sequence, f"Filled on SUCCESS (from {data_property_name})")
-        SubElement(
+    for data_property_name, data_property_schema in data_properties:
+        add_data_property_to_xsd(
+            schema_element,
             root_sequence,
-            xs_tag("element"),
-            {
-                "name": data_property_name,
-                "type": data_type_name,
-                "minOccurs": "0",
-                "maxOccurs": "1",
-            },
+            data_property_name,
+            data_property_schema,
+            generated_types,
         )
 
-        if is_array_schema(data_property_schema):
-            item_schema = data_property_schema.get("items", {}) or {}
-            add_complex_type(
-                schema_element,
-                data_type_name,
-                item_schema,
-                generated_types,
-            )
-        elif is_object_schema(data_property_schema):
-            add_complex_type(
-                schema_element,
-                data_type_name,
-                data_property_schema,
-                generated_types,
-            )
-        else:
-            raise ValueError(
-                f"Data property '{data_property_name}' must be an object or array."
-            )
-
-    add_comment_before_element(root_sequence, "Filled on FAILED; maxOccurs=unbounded → serialized as JSON array")
+    add_comment_before_element(
+        root_sequence,
+        "Filled on FAILED; maxOccurs=unbounded → serialized as JSON array",
+    )
     SubElement(
         root_sequence,
         xs_tag("element"),
@@ -613,8 +1076,8 @@ def generate_oic_xsd(operation_id: str, response_schema: dict) -> str:
         },
     )
 
-    add_status_type(schema_element)
-    add_error_types(schema_element)
+    add_status_type(schema_element, response_schema)
+    add_error_types_from_schema(schema_element, response_schema, generated_types)
 
     indent_xml(schema_element)
 
@@ -645,6 +1108,7 @@ def get_output_base_dir(openapi_path: Path, custom_output_dir: Path | None) -> P
 
     folder_name = openapi_path.stem
     return Path.cwd() / "generated" / folder_name
+
 
 def process_openapi(openapi_path: Path, output_base_dir: Path):
     raw_document = load_document(openapi_path)
@@ -711,14 +1175,9 @@ def process_openapi(openapi_path: Path, output_base_dir: Path):
                 )
                 continue
 
-            operation_file_name = kebab_case(operation_id) + "-response"
+            response_schema = resolve_schema(response_schema)
 
-            json_schema_path = (
-                output_base_dir
-                / "schemas"
-                / "json"
-                / f"{operation_file_name}.schema.json"
-            )
+            operation_file_name = kebab_case(operation_id) + "-response"
 
             xsd_path = (
                 output_base_dir
@@ -727,32 +1186,36 @@ def process_openapi(openapi_path: Path, output_base_dir: Path):
                 / f"{operation_file_name}.xsd"
             )
 
-            write_json_file(json_schema_path, response_schema)
+            json_schema_path = (
+                output_base_dir
+                / "schemas"
+                / "response"
+                / f"{operation_file_name}.json"
+            )
 
             xsd_content = generate_oic_xsd(operation_id, response_schema)
             write_text_file(xsd_path, xsd_content)
+
+            merged_json_schema = merge_response_schemas_with_errors(operation)
+            if not merged_json_schema:
+                merged_json_schema = response_schema
+            write_json_file(json_schema_path, merged_json_schema)
 
             result = {
                 "operationId": operation_id,
                 "method": method_upper(method_lower),
                 "path": api_path,
                 "statusCode": status_code,
-                "jsonSchemaPath": json_schema_path,
                 "xsdPath": xsd_path,
+                "jsonSchemaPath": json_schema_path,
             }
 
             request_body = operation.get("requestBody")
             request_schema = find_json_request_schema(request_body)
 
             if request_schema and method_lower != "get":
+                request_schema = resolve_schema(request_schema)
                 operation_file_name_request = kebab_case(operation_id) + "-request"
-
-                request_json_schema_path = (
-                    output_base_dir
-                    / "schemas"
-                    / "json"
-                    / f"{operation_file_name_request}.schema.json"
-                )
 
                 request_xsd_path = (
                     output_base_dir
@@ -761,12 +1224,19 @@ def process_openapi(openapi_path: Path, output_base_dir: Path):
                     / f"{operation_file_name_request}.xsd"
                 )
 
-                write_json_file(request_json_schema_path, request_schema)
+                request_json_schema_path = (
+                    output_base_dir
+                    / "schemas"
+                    / "request"
+                    / f"{operation_file_name_request}.json"
+                )
+
                 request_xsd_content = generate_oic_request_xsd(operation_id, request_schema)
                 write_text_file(request_xsd_path, request_xsd_content)
+                write_json_file(request_json_schema_path, request_schema)
 
-                result["requestJsonSchemaPath"] = request_json_schema_path
                 result["requestXsdPath"] = request_xsd_path
+                result["requestJsonSchemaPath"] = request_json_schema_path
 
             generated_results.append(result)
 

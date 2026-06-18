@@ -1,0 +1,192 @@
+{
+  "openapi": "3.0.0",
+  "info": {
+    "version": "1.0.0",
+    "title": "Comprehensive Data Types API",
+    "description": "API testing all OpenAPI data types and formats"
+  },
+  "paths": {
+    "/test-types": {
+      "post": {
+        "operationId": "testComprehensiveTypes",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TypesRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TypesResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "TypesRequest": {
+        "type": "object",
+        "properties": {
+          "stringField": {
+            "type": "string",
+            "description": "Plain string"
+          },
+          "dateField": {
+            "type": "string",
+            "format": "date",
+            "description": "Date in YYYY-MM-DD format"
+          },
+          "dateTimeField": {
+            "type": "string",
+            "format": "date-time",
+            "description": "DateTime in RFC3339 format"
+          },
+          "timeField": {
+            "type": "string",
+            "format": "time",
+            "description": "Time field"
+          },
+          "durationField": {
+            "type": "string",
+            "format": "duration",
+            "description": "ISO 8601 duration"
+          },
+          "uuidField": {
+            "type": "string",
+            "format": "uuid",
+            "description": "UUID v4"
+          },
+          "emailField": {
+            "type": "string",
+            "format": "email",
+            "description": "Email address"
+          },
+          "uriField": {
+            "type": "string",
+            "format": "uri",
+            "description": "URI"
+          },
+          "ipv4Field": {
+            "type": "string",
+            "format": "ipv4",
+            "description": "IPv4 address"
+          },
+          "ipv6Field": {
+            "type": "string",
+            "format": "ipv6",
+            "description": "IPv6 address"
+          },
+          "int32Field": {
+            "type": "integer",
+            "format": "int32",
+            "description": "32-bit integer"
+          },
+          "int64Field": {
+            "type": "integer",
+            "format": "int64",
+            "description": "64-bit long integer"
+          },
+          "floatField": {
+            "type": "number",
+            "format": "float",
+            "description": "Floating point number"
+          },
+          "doubleField": {
+            "type": "number",
+            "format": "double",
+            "description": "Double precision number"
+          },
+          "decimalField": {
+            "type": "number",
+            "description": "Decimal number"
+          },
+          "booleanField": {
+            "type": "boolean",
+            "description": "Boolean flag"
+          },
+          "base64Field": {
+            "type": "string",
+            "format": "byte",
+            "description": "Base64 encoded data"
+          },
+          "passwordField": {
+            "type": "string",
+            "format": "password",
+            "description": "Password field"
+          }
+        },
+        "required": ["stringField", "dateField"],
+        "additionalProperties": false
+      },
+      "TypesResponse": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": ["SUCCESS", "FAILED"],
+            "description": "Operation status"
+          },
+          "data": {
+            "type": "object",
+            "description": "Response data",
+            "properties": {
+              "processedAt": {
+                "type": "string",
+                "format": "date-time",
+                "description": "When the request was processed"
+              },
+              "processingDuration": {
+                "type": "string",
+                "format": "duration",
+                "description": "How long processing took"
+              },
+              "resultCode": {
+                "type": "integer",
+                "format": "int32",
+                "description": "Result status code"
+              },
+              "resultValue": {
+                "type": "number",
+                "format": "double",
+                "description": "Numeric result"
+              }
+            },
+            "required": ["processedAt"]
+          },
+          "errors": {
+            "type": "array",
+            "description": "Error details (present on failure)",
+            "items": {
+              "type": "object",
+              "properties": {
+                "code": {
+                  "type": "string",
+                  "description": "Error code"
+                },
+                "message": {
+                  "type": "string",
+                  "description": "Error message"
+                }
+              },
+              "required": ["code", "message"]
+            }
+          }
+        },
+        "required": ["status"],
+        "additionalProperties": false
+      }
+    }
+  }
+}
