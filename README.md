@@ -110,21 +110,23 @@ generated/
         ├── request/
         │   ├── create-item-request.xsd
         │   └── create-item-request.json
-        └── response/
-            ├── create-item-response.xsd
-            ├── create-item-response.json
-            ├── get-item-by-id-response.xsd
-            └── get-item-by-id-response.json
+        ├── response/
+        │   ├── create-item-response.xsd
+        │   ├── create-item-response.json
+        │   └── get-item-by-id-response.json
+        └── error/
+            └── create-item-response.json
 ```
 
 | File | Purpose | When generated |
 |------|---------|----------------|
-| `*-response.xsd` | Polymorphic response schema for OIC | Every operation |
+| `*-response.xsd` | Polymorphic response schema for OIC (handles both success + error) | Every operation |
 | `*-request.xsd` | Plain request body schema | POST, PUT, PATCH, DELETE with JSON body |
-| `*-response.json` | Merged JSON schema (success + error responses) | Every operation |
+| `response/*-response.json` | Success response schema (status=SUCCESS only) | Every operation |
+| `error/*-response.json` | Error response schema (status=FAILED only) | Operations with 4xx/5xx error responses |
 | `*-request.json` | Request body JSON schema | Same as request XSD |
 
-JSON schemas are **reference only** for documentation; OIC uses the XSD files.
+**Note:** JSON schemas are **reference only** for documentation; OIC uses the XSD files. Success and error response schemas are kept separate for clarity.
 
 ---
 

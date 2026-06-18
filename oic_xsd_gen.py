@@ -829,6 +829,36 @@ def find_json_request_schema(request_body: dict) -> dict | None:
     return None
 
 
+def extract_error_schemas(operation: dict) -> list[dict]:
+    responses = operation.get("responses", {}) or {}
+    error_schemas = []
+
+    for status_code, response in responses.items():
+        status_int = int(status_code) if status_code.isdigit() else None
+        if status_int and status_int >= 400:
+            error_schema = find_json_response_schema(response)
+            if error_schema:
+                error_schemas.append(resolve_schema(error_schema))
+
+    return error_schemas
+
+
+def merge_error_response_schemas(error_schemas: list[dict]) -> dict | None:
+    if not error_schemas:
+        return None
+
+    merged = error_schemas[0]
+
+    for error_schema in error_schemas[1:]:
+        merged = deep_merge_schemas(
+            merged,
+            error_schema,
+            required_mode="intersection",
+        )
+
+    return merged
+
+
 def merge_response_schemas_with_errors(operation: dict) -> dict | None:
     responses = operation.get("responses", {}) or {}
 
@@ -1196,10 +1226,7 @@ def process_openapi(openapi_path: Path, output_base_dir: Path):
             xsd_content = generate_oic_xsd(operation_id, response_schema)
             write_text_file(xsd_path, xsd_content)
 
-            merged_json_schema = merge_response_schemas_with_errors(operation)
-            if not merged_json_schema:
-                merged_json_schema = response_schema
-            write_json_file(json_schema_path, merged_json_schema)
+            write_json_file(json_schema_path, response_schema)
 
             result = {
                 "operationId": operation_id,
@@ -1209,6 +1236,19 @@ def process_openapi(openapi_path: Path, output_base_dir: Path):
                 "xsdPath": xsd_path,
                 "jsonSchemaPath": json_schema_path,
             }
+
+            error_schemas = extract_error_schemas(operation)
+            if error_schemas:
+                merged_error_schema = merge_error_response_schemas(error_schemas)
+                if merged_error_schema:
+                    error_json_path = (
+                        output_base_dir
+                        / "schemas"
+                        / "error"
+                        / f"{operation_file_name}.json"
+                    )
+                    write_json_file(error_json_path, merged_error_schema)
+                    result["errorJsonSchemaPath"] = error_json_path
 
             request_body = operation.get("requestBody")
             request_schema = find_json_request_schema(request_body)
@@ -1256,6 +1296,8 @@ def print_results(generated_results: list[dict], skipped_results: list[dict]):
         for result in generated_results:
             print(f"- {result['operationId']} ({result['method']} {result['path']})")
             print(f"  Response XSD: {result['xsdPath']}")
+            if "errorJsonSchemaPath" in result:
+                print(f"  Error JSON Schema: {result['errorJsonSchemaPath']}")
             if "requestXsdPath" in result:
                 print(f"  Request XSD:  {result['requestXsdPath']}")
 

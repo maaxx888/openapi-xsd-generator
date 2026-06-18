@@ -189,7 +189,7 @@ class TestConstraintsApi:
       assert "reason" in response_xsd
 
   def test_merged_json_includes_correlation_id(self, artifacts):
-      json_path = Path(artifacts[0]["jsonSchemaPath"])
+      json_path = Path(artifacts[0]["errorJsonSchemaPath"])
       schema = json.loads(json_path.read_text(encoding="utf-8"))
       assert "correlationId" in schema["properties"]
 
