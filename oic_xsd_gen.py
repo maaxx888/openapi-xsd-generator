@@ -909,11 +909,30 @@ def detect_data_properties(response_schema: dict) -> list[tuple[str, dict]]:
     properties = response_schema.get("properties", {}) or {}
     ignored_properties = {"status", "errors"}
 
-    return [
-        (property_name, property_schema)
-        for property_name, property_schema in properties.items()
-        if property_name not in ignored_properties
-    ]
+    data_properties = []
+    for property_name, property_schema in properties.items():
+        if property_name in ignored_properties:
+            continue
+        prop_type = schema_type(property_schema)
+        if prop_type in ("object", "array"):
+            data_properties.append((property_name, property_schema))
+
+    return data_properties
+
+
+def detect_envelope_fields(response_schema: dict) -> list[tuple[str, dict]]:
+    properties = response_schema.get("properties", {}) or {}
+    ignored_properties = {"status", "errors"}
+
+    envelope_fields = []
+    for property_name, property_schema in properties.items():
+        if property_name in ignored_properties:
+            continue
+        prop_type = schema_type(property_schema)
+        if prop_type not in ("object", "array"):
+            envelope_fields.append((property_name, property_schema))
+
+    return envelope_fields
 
 
 def operation_root_name(operation_id: str) -> str:
@@ -1091,6 +1110,23 @@ Root element: {root_name}
             generated_types,
         )
 
+    envelope_fields = detect_envelope_fields(response_schema)
+    for envelope_field_name, envelope_field_schema in envelope_fields:
+        xs_type = infer_xs_type(envelope_field_schema)
+        description = envelope_field_schema.get("description")
+        if description:
+            add_comment_before_element(root_sequence, description)
+        SubElement(
+            root_sequence,
+            xs_tag("element"),
+            {
+                "name": envelope_field_name,
+                "type": xs_type,
+                "minOccurs": "0",
+                "maxOccurs": "1",
+            },
+        )
+
     add_comment_before_element(
         root_sequence,
         "Filled on FAILED; maxOccurs=unbounded → serialized as JSON array",
@@ -1207,6 +1243,10 @@ def process_openapi(openapi_path: Path, output_base_dir: Path):
 
             response_schema = resolve_schema(response_schema)
 
+            merged_response_schema = merge_response_schemas_with_errors(operation)
+            if not merged_response_schema:
+                merged_response_schema = response_schema
+
             operation_file_name = kebab_case(operation_id) + "-response"
 
             xsd_path = (
@@ -1223,7 +1263,7 @@ def process_openapi(openapi_path: Path, output_base_dir: Path):
                 / f"{operation_file_name}.json"
             )
 
-            xsd_content = generate_oic_xsd(operation_id, response_schema)
+            xsd_content = generate_oic_xsd(operation_id, merged_response_schema)
             write_text_file(xsd_path, xsd_content)
 
             write_json_file(json_schema_path, response_schema)
