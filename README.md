@@ -27,17 +27,40 @@ Created by **[Maxime Frankefort](https://github.com/maaxx888)**
 - **Type mapping** — dates, numbers, enums, nested objects, arrays (see [SUPPORTED_TYPES.md](SUPPORTED_TYPES.md))
 - **Documentation in XSD** — field descriptions from OpenAPI become XML comments
 - **Deduplication** — avoids duplicate type definitions within a single generated schema
+- **Selective operation conversion** — choose which APIs (by tags/domains) to convert; display APIs grouped by service domains
 
 ---
 
 ## Quick start
 
+### Setup
+
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate   # Windows: .venv\Scripts\Activate.ps1
 pip install -r requirements.txt
+```
 
+### Run with interactive selection
+
+```bash
 python3 oic_xsd_gen.py test-input/sample-api-v1.0.0.json
+```
+
+The tool will display all available APIs grouped by their tags (domains/services), then prompt you to select which ones to convert:
+
+```
+================================================================================
+AVAILABLE APIS AND OPERATIONS
+================================================================================
+
+Resources:
+  1. createItem (POST /items)
+  2. getItemById (GET /items/{itemId})
+
+================================================================================
+Enter operation numbers to convert (comma-separated, e.g., '1,2,4')
+or press Enter to convert all: 1,2
 ```
 
 Output appears under `generated/sample-api-v1.0.0/schemas/`.
@@ -70,7 +93,9 @@ Dependencies (`requirements.txt`):
 
 ## Usage
 
-### Basic
+### Interactive mode (default)
+
+Show all available APIs grouped by domain/tag and let the user choose which ones to convert:
 
 ```bash
 python3 oic_xsd_gen.py <openapi-file>
@@ -82,10 +107,45 @@ Example:
 python3 oic_xsd_gen.py test-input/partijhub-api-v1.0.0.json
 ```
 
+The tool displays all operations grouped by their OpenAPI tags (service domains). Press Enter to convert all, or enter comma-separated numbers (e.g., `1,2,4`) to convert only those operations.
+
+### Non-interactive mode: convert all
+
+Use `--all` to convert all operations without prompting:
+
+```bash
+python3 oic_xsd_gen.py <openapi-file> --all
+```
+
+Useful for CI/CD pipelines or batch processing.
+
+### Non-interactive mode: select specific operations
+
+Use `--select` to convert only specific operations by number:
+
+```bash
+python3 oic_xsd_gen.py <openapi-file> --select 1,2,4
+```
+
+Example:
+
+```bash
+python3 oic_xsd_gen.py apis/myservice/spec/api-v1.0.0.json --select 1,3,5
+```
+
+Numbers correspond to the operation indices shown in the interactive list.
+
 ### Custom output directory
 
 ```bash
 python3 oic_xsd_gen.py <openapi-file> -o /path/to/output
+```
+
+Works with all modes:
+
+```bash
+python3 oic_xsd_gen.py <openapi-file> --all -o ./schemas
+python3 oic_xsd_gen.py <openapi-file> --select 1,2 -o ./schemas
 ```
 
 If `-o` is omitted, output goes to `./generated/<spec-stem>/` (the OpenAPI filename without extension).
@@ -93,15 +153,104 @@ If `-o` is omitted, output goes to `./generated/<spec-stem>/` (the OpenAPI filen
 ### CLI reference
 
 ```
-usage: oic_xsd_gen.py [-h] [-o OUTPUT] openapi_path
+usage: oic_xsd_gen.py [-h] [-o OUTPUT] [-a] [-s SELECT] openapi_path
+
+Generate OIC Gen3 polymorphic XSD response schemas from an OpenAPI 3.x
+document with selective operation conversion.
 
 positional arguments:
-  openapi_path         Path to the OpenAPI JSON or YAML document.
+  openapi_path          Path to the OpenAPI JSON or YAML document.
 
 options:
-  -h, --help           show this help message and exit
-  -o, --output OUTPUT  Output folder. Default: ./generated/<spec-stem>
+  -h, --help            Show this help message and exit.
+  -o, --output OUTPUT   Output folder. Default: ./generated/<spec-stem>
+                        Example: -o ./generated-partijhub
+  -a, --all             Convert all operations without prompting for 
+                        selection (non-interactive mode).
+  -s, --select SELECT   Comma-separated operation numbers to convert 
+                        (e.g., '1,2,4'). Overrides interactive prompt.
 ```
+
+---
+
+## API Discovery & Selection
+
+### Understanding API Grouping
+
+The tool automatically groups all operations by their **OpenAPI tags**. Tags represent service domains or business areas within your API.
+
+For example, an API might have operations grouped as follows:
+
+```
+Wegwijs (tag):
+  1. createOrganisationKey (POST /v1/organisations/{id}/keys)
+  2. updateOrganisationKey (PUT /v1/organisations/{id}/keys/{keyId})
+
+MAGDA (tag):
+  3. searchOrganisations (GET /v1/organisations/search)
+  4. getOrganisation (GET /v1/organisations/{id})
+
+Audit (tag):
+  5. listAuditLog (GET /v1/audit)
+```
+
+### Interactive Discovery
+
+When you run without `--all` or `--select`, the tool displays all operations grouped by domain:
+
+```bash
+python3 oic_xsd_gen.py apis/recordToReport/spec/api-v1.0.0.json
+```
+
+Output:
+
+```
+================================================================================
+AVAILABLE APIS AND OPERATIONS
+================================================================================
+
+Wegwijs:
+  1. createOrganisationKey (POST /v1/organisations/{id}/keys)
+  2. updateOrganisationKey (PUT /v1/organisations/{id}/keys/{keyId})
+
+MAGDA:
+  3. searchOrganisations (GET /v1/organisations/search)
+  4. getOrganisation (GET /v1/organisations/{id})
+
+================================================================================
+Enter operation numbers to convert (comma-separated, e.g., '1,2,4')
+or press Enter to convert all: 
+```
+
+You can then:
+
+- **Press Enter** — convert all 4 operations
+- **Enter `1,2`** — convert only Wegwijs operations
+- **Enter `3,4`** — convert only MAGDA operations
+- **Enter `1,3`** — convert operations from both domains
+
+### For Team Use
+
+When multiple team members use this tool:
+
+1. **First run**: Execute without flags to see what's available
+   ```bash
+   python3 oic_xsd_gen.py apis/myservice/spec/api.json
+   ```
+
+2. **Then decide** which operations your component needs
+
+3. **Automated runs** (CI/CD): Use flags to avoid interactive prompts
+   ```bash
+   # Your component only needs operations 1 and 3
+   python3 oic_xsd_gen.py apis/myservice/spec/api.json --select 1,3
+   ```
+
+### Tips for Team Collaboration
+
+- **Document selected operations** — Keep track of which operations each component uses (e.g., in a `CONFIG.md`)
+- **Avoid processing everything** — Only generate schemas for what you need; faster processing, cleaner outputs
+- **Share operation indices** — In team documentation, reference operations by their index and operationId (e.g., "Use operation 1 (createOrganisationKey) with OIC REST adapter")
 
 ---
 

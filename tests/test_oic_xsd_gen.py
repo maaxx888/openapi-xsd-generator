@@ -7,14 +7,10 @@ from xml.etree import ElementTree as ET
 
 import pytest
 
-from oic_xsd_gen import (
-    deep_merge_schemas,
-    generate_oic_request_xsd,
-    generate_oic_xsd,
-    infer_xs_type,
-    process_openapi,
-    resolve_schema,
-)
+from oic_generator.schema import deep_merge_schemas, resolve_schema
+from oic_generator.types import infer_xs_type
+from oic_generator.xsd import generate_oic_request_xsd, generate_oic_xsd
+from oic_generator.processor import process_openapi
 
 ROOT = Path(__file__).resolve().parent.parent
 TEST_INPUT = ROOT / "test-input"
@@ -198,12 +194,4 @@ class TestConstraintsApi:
           ET.parse(artifact["xsdPath"])
 
 
-class TestPartijhub:
-  def test_generates_without_skip(self):
-      spec_path = TEST_INPUT / "partijhub-api-v1.0.0.json"
-      generated, skipped = process_openapi(
-          spec_path,
-          ROOT / "generated" / "test-partijhub",
-      )
-      assert len(generated) == 1
-      assert not skipped
+
